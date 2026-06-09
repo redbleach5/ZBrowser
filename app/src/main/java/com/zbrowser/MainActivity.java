@@ -10,7 +10,6 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
-import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -25,18 +24,6 @@ import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
-import android.webkit.CookieManager;
-import android.webkit.DownloadListener;
-import android.webkit.GeolocationPermissions;
-import android.webkit.HttpAuthHandler;
-import android.webkit.SslErrorHandler;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -52,14 +39,26 @@ import android.widget.Toast;
 import android.app.Activity;
 
 import org.json.JSONObject;
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoView;
+import org.mozilla.geckoview.GeckoResult;
+import org.mozilla.geckoview.GeckoSession.NavigationDelegate;
+import org.mozilla.geckoview.GeckoSession.ContentDelegate;
+import org.mozilla.geckoview.GeckoSession.ProgressDelegate;
+import org.mozilla.geckoview.GeckoSession.PromptDelegate;
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate;
+import org.mozilla.geckoview.GeckoSessionSettings;
+import org.mozilla.geckoview.AllowOrDeny;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.OutputStream;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
@@ -86,7 +85,7 @@ public class MainActivity extends Activity {
     private ImageButton menuButton;
     private ImageView sslIcon;
     private ProgressBar progressBar;
-    private WebView webView;
+    private GeckoView geckoView;
     private ScrollView homePage;
     private FrameLayout webViewContainer;
     private LinearLayout bottomBar;
@@ -108,6 +107,11 @@ public class MainActivity extends Activity {
     private FrameLayout menuOverlay;
     private LinearLayout menuSheet;
 
+    // GeckoView engine
+    private static GeckoRuntime runtime;
+    private GeckoSession currentSession;
+    private Map<Integer, GeckoSession> tabSessions = new HashMap<>();
+
     // State
     private BrowserSettings settings;
     private BrowserDatabase database;
@@ -117,12 +121,20 @@ public class MainActivity extends Activity {
     private String currentUrl = "";
     private String currentTitle = "";
 
+    // Navigation state (tracked via delegates)
+    private boolean canGoBack = false;
+    private boolean canGoForward = false;
+    private boolean isDesktopMode = false;
+
     // Feature state
     private boolean isFullScreen = false;
     private boolean isNightMode = false;
     private boolean isDataSaver = false;
     private boolean isVolumeScrollEnabled = false;
     private int nextTabId = 0;
+
+    // Find in page state
+    private String currentFindQuery = "";
 
     // GestureDetector for double-tap
     private GestureDetector gestureDetector;
@@ -169,10 +181,29 @@ public class MainActivity extends Activity {
             "if(style)style.remove();" +
             "})()";
 
+    // Data saver CSS injection
+    private static final String DATA_SAVER_CSS = "javascript:(function(){" +
+            "var style=document.createElement('style');" +
+            "style.type='text/css';" +
+            "style.id='zbrowser-data-saver';" +
+            "style.innerHTML='img{display:none!important;}';" +
+            "document.head.appendChild(style);" +
+            "})()";
+
+    private static final String DATA_SAVER_REMOVE_CSS = "javascript:(function(){" +
+            "var style=document.getElementById('zbrowser-data-saver');" +
+            "if(style)style.remove();" +
+            "})()";
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Initialize GeckoRuntime (singleton)
+        if (runtime == null) {
+            runtime = GeckoRuntime.create(this);
+        }
 
         // Immersive sticky full-screen mode
         enableImmersiveMode();
@@ -188,7 +219,7 @@ public class MainActivity extends Activity {
         setupUrlBar();
         setupHomeSearchBar();
         setupSuggestions();
-        setupWebView();
+        setupGeckoView();
         setupBottomBar();
         setupHomePage();
         setupFindBar();
@@ -413,7 +444,7 @@ public class MainActivity extends Activity {
         menuButton = findViewById(R.id.menu_button);
         sslIcon = findViewById(R.id.ssl_icon);
         progressBar = findViewById(R.id.progress_bar);
-        webView = findViewById(R.id.webview);
+        geckoView = findViewById(R.id.gecko_view);
         homePage = findViewById(R.id.home_page);
         webViewContainer = findViewById(R.id.webview_container);
         bottomBar = findViewById(R.id.bottom_bar);
@@ -585,76 +616,332 @@ public class MainActivity extends Activity {
         suggestionsContainer.setVisibility(View.GONE);
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private void setupWebView() {
-        WebSettings webSettings = webView.getSettings();
+    // ============ GeckoView Setup ============
 
-        webSettings.setJavaScriptEnabled(settings.isJavascriptEnabled());
-        webSettings.setDomStorageEnabled(true);
-        webSettings.setDatabaseEnabled(true);
-        webSettings.setAllowFileAccess(false);
-        webSettings.setAllowContentAccess(false);
-        webSettings.setAllowFileAccessFromFileURLs(false);
-        webSettings.setAllowUniversalAccessFromFileURLs(false);
-        webSettings.setLoadWithOverviewMode(true);
-        webSettings.setUseWideViewPort(true);
-        webSettings.setSupportZoom(true);
-        webSettings.setBuiltInZoomControls(true);
-        webSettings.setDisplayZoomControls(false);
-        webSettings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        webSettings.setMediaPlaybackRequiresUserGesture(false);
-        webSettings.setSaveFormData(!isIncognito);
-        webSettings.setSavePassword(false);
-        webSettings.setBlockNetworkImage(isDataSaver);
+    private void setupGeckoView() {
+        // Create initial session — tab sessions are created in createNewTab()
+        // This sets up the view but the first session is created via createNewTab in onCreate
+    }
 
-        int textSize = settings.getTextSize();
-        webSettings.setTextZoom(textSize);
-
-        String ua = settings.getUserAgentString(this);
-        if (ua != null) {
-            webSettings.setUserAgentString(ua);
+    /**
+     * Creates a new GeckoSession with all delegates configured.
+     */
+    private GeckoSession createGeckoSession(boolean incognito) {
+        GeckoSessionSettings.Builder settingsBuilder = new GeckoSessionSettings.Builder();
+        if (incognito) {
+            settingsBuilder.usePrivateMode(true);
+        }
+        if (isDesktopMode) {
+            settingsBuilder.userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP);
+            settingsBuilder.viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP);
+        } else {
+            settingsBuilder.userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE);
+            settingsBuilder.viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE);
         }
 
-        CookieManager cookieManager = CookieManager.getInstance();
-        cookieManager.setAcceptCookie(settings.isCookiesEnabled());
-        cookieManager.setAcceptThirdPartyCookies(webView, settings.isCookiesEnabled());
+        GeckoSession session = new GeckoSession(settingsBuilder.build());
+        session.open(runtime);
+        setupSessionDelegates(session);
+        return session;
+    }
 
-        webView.setWebViewClient(new ZBrowserWebViewClient());
-        webView.setWebChromeClient(new ZBrowserWebChromeClient());
+    /**
+     * Configures all delegates (Navigation, Content, Progress, Prompt, Permission)
+     * on the given GeckoSession.
+     */
+    private void setupSessionDelegates(GeckoSession session) {
 
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
-            if (url == null || url.isEmpty() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
-                Toast.makeText(this, "Небезопасная ссылка для загрузки", Toast.LENGTH_SHORT).show();
-                return;
+        // ---- Navigation Delegate ----
+        session.setNavigationDelegate(new NavigationDelegate() {
+            @Override
+            public void onLocationChange(GeckoSession s, String url, List<PermissionDelegate.ContentPermission> perms, Boolean hasOnlyAppOrigin) {
+                if (url != null) {
+                    currentUrl = url;
+                    urlBar.setText(url);
+                }
             }
-            Intent downloadIntent = new Intent(this, DownloadService.class);
-            downloadIntent.putExtra(DownloadService.EXTRA_URL, url);
-            String filename = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
-            downloadIntent.putExtra(DownloadService.EXTRA_FILENAME, filename);
-            startService(downloadIntent);
-            Toast.makeText(this, "Загрузка начата: " + filename, Toast.LENGTH_SHORT).show();
+
+            @Override
+            public void onCanGoBack(GeckoSession s, boolean canBack) {
+                canGoBack = canBack;
+            }
+
+            @Override
+            public void onCanGoForward(GeckoSession s, boolean canFwd) {
+                canGoForward = canFwd;
+            }
+
+            @Override
+            public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession s, NavigationDelegate.LoadRequest request) {
+                String url = request.uri;
+
+                // Handle special URL schemes
+                if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
+                    try {
+                        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                        startActivity(intent);
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this, "Не удалось открыть: " + url, Toast.LENGTH_SHORT).show();
+                    }
+                    return GeckoResult.deny();
+                }
+
+                if (url.startsWith("intent://")) {
+                    try {
+                        Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+                        if (intent != null) {
+                            startActivity(intent);
+                            return GeckoResult.deny();
+                        }
+                    } catch (URISyntaxException e) {
+                        return GeckoResult.deny();
+                    } catch (Exception e) {
+                        // App not installed, try fallback
+                        Uri uri = Uri.parse(url);
+                        String fallback = uri.getQueryParameter("fallback");
+                        if (fallback != null && !fallback.isEmpty()) {
+                            s.loadUri(fallback);
+                            return GeckoResult.deny();
+                        }
+                        Toast.makeText(MainActivity.this, "Приложение не найдено", Toast.LENGTH_SHORT).show();
+                        return GeckoResult.deny();
+                    }
+                }
+
+                // Ad blocking
+                if (shouldBlockAd(url)) {
+                    return GeckoResult.deny();
+                }
+
+                return GeckoResult.allow();
+            }
+
+            @Override
+            public GeckoResult<GeckoSession> onNewSession(GeckoSession s, String uri) {
+                // Handle window.open — create a new tab
+                GeckoSession newSession = createGeckoSession(isIncognito);
+                int tabId = nextTabId++;
+                TabInfo tab = new TabInfo(tabId, "Новая вкладка", uri, isIncognito);
+                tabs.add(tab);
+                tabSessions.put(tabId, newSession);
+                currentTabId = tabId;
+                currentSession = newSession;
+                geckoView.setSession(newSession);
+                updateTabCount();
+                newSession.loadUri(uri);
+                return GeckoResult.fromValue(newSession);
+            }
+        });
+
+        // ---- Content Delegate ----
+        session.setContentDelegate(new ContentDelegate() {
+            @Override
+            public void onTitleChange(GeckoSession s, String title) {
+                if (title != null && !title.isEmpty()) {
+                    currentTitle = title;
+                    updateCurrentTab(currentUrl, title);
+                    if (isFullScreen) {
+                        fullscreenTitle.setText(title);
+                    }
+                }
+            }
+
+            @Override
+            public void onExternalResponse(GeckoSession s, org.mozilla.geckoview.WebResponse response) {
+                // Handle downloads
+                String url = response.uri;
+                if (url == null || url.isEmpty() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                    Toast.makeText(MainActivity.this, "Небезопасная ссылка для загрузки", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String filename = guessFileName(url, response.headers != null ? response.headers.get("content-disposition") : null, null);
+                Intent downloadIntent = new Intent(MainActivity.this, DownloadService.class);
+                downloadIntent.putExtra(DownloadService.EXTRA_URL, url);
+                downloadIntent.putExtra(DownloadService.EXTRA_FILENAME, filename);
+                startService(downloadIntent);
+                Toast.makeText(MainActivity.this, "Загрузка начата: " + filename, Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // ---- Progress Delegate ----
+        session.setProgressDelegate(new ProgressDelegate() {
+            @Override
+            public void onPageStart(GeckoSession s, String url) {
+                progressBar.setVisibility(View.VISIBLE);
+                progressBar.setProgress(0);
+                currentUrl = url;
+                urlBar.setText(url);
+            }
+
+            @Override
+            public void onPageStop(GeckoSession s, boolean success) {
+                progressBar.setVisibility(View.GONE);
+                updateSslIcon(currentUrl.startsWith("https://"));
+                updateBookmarkIcon();
+
+                if (currentTitle == null || currentTitle.isEmpty()) {
+                    currentTitle = currentUrl;
+                }
+                updateCurrentTab(currentUrl, currentTitle);
+
+                // Save to history (non-incognito only)
+                if (!isIncognito && currentUrl != null && !currentUrl.isEmpty()) {
+                    database.addHistory(currentTitle != null ? currentTitle : currentUrl, currentUrl);
+                }
+
+                // Re-apply night mode if active
+                if (isNightMode && currentSession != null) {
+                    currentSession.loadUri(NIGHT_MODE_CSS);
+                }
+
+                // Re-apply data saver if active
+                if (isDataSaver && currentSession != null) {
+                    currentSession.loadUri(DATA_SAVER_CSS);
+                }
+            }
+
+            @Override
+            public void onSecurityChange(GeckoSession s, ProgressDelegate.SecurityInformation securityInfo) {
+                if (securityInfo != null && securityInfo.isSecure) {
+                    updateSslIcon(true);
+                } else {
+                    updateSslIcon(false);
+                }
+            }
+        });
+
+        // ---- Prompt Delegate ----
+        session.setPromptDelegate(new PromptDelegate() {
+            @Override
+            public GeckoResult<PromptDelegate.PromptResponse> onAuthPrompt(GeckoSession s, PromptDelegate.AuthPrompt prompt) {
+                final GeckoResult<PromptDelegate.PromptResponse> result = new GeckoResult<>();
+                View dialogView = getLayoutInflater().inflate(R.layout.dialog_http_auth, null);
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Авторизация")
+                        .setView(dialogView)
+                        .setPositiveButton("Войти", (dialog, which) -> {
+                            String username = ((EditText) dialogView.findViewById(R.id.auth_username)).getText().toString();
+                            String password = ((EditText) dialogView.findViewById(R.id.auth_password)).getText().toString();
+                            result.complete(prompt.confirm(username, password));
+                        })
+                        .setNegativeButton("Отмена", (dialog, which) -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .setOnCancelListener(dialog -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .show();
+                return result;
+            }
+
+            @Override
+            public GeckoResult<PromptDelegate.PromptResponse> onAlertPrompt(GeckoSession s, PromptDelegate.AlertPrompt prompt) {
+                final GeckoResult<PromptDelegate.PromptResponse> result = new GeckoResult<>();
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(prompt.title)
+                        .setMessage(prompt.message)
+                        .setPositiveButton("OK", (dialog, which) -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .setOnCancelListener(dialog -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .show();
+                return result;
+            }
+
+            @Override
+            public GeckoResult<PromptDelegate.PromptResponse> onButtonPrompt(GeckoSession s, PromptDelegate.ButtonPrompt prompt) {
+                final GeckoResult<PromptDelegate.PromptResponse> result = new GeckoResult<>();
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(prompt.title)
+                        .setMessage(prompt.message)
+                        .setPositiveButton("OK", (dialog, which) -> {
+                            result.complete(prompt.confirm(0));
+                        })
+                        .setNegativeButton("Отмена", (dialog, which) -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .setOnCancelListener(dialog -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .show();
+                return result;
+            }
+
+            @Override
+            public GeckoResult<PromptDelegate.PromptResponse> onTextPrompt(GeckoSession s, PromptDelegate.TextPrompt prompt) {
+                final GeckoResult<PromptDelegate.PromptResponse> result = new GeckoResult<>();
+                final EditText input = new EditText(MainActivity.this);
+                input.setText(prompt.defaultValue);
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(prompt.title)
+                        .setMessage(prompt.message)
+                        .setView(input)
+                        .setPositiveButton("OK", (dialog, which) -> {
+                            result.complete(prompt.confirm(input.getText().toString()));
+                        })
+                        .setNegativeButton("Отмена", (dialog, which) -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .setOnCancelListener(dialog -> {
+                            result.complete(prompt.dismiss());
+                        })
+                        .show();
+                return result;
+            }
+        });
+
+        // ---- Permission Delegate ----
+        session.setPermissionDelegate(new PermissionDelegate() {
+            @Override
+            public void onAndroidPermissionsRequest(GeckoSession s, String[] permissions, PermissionDelegate.Callback callback) {
+                // Grant Android permissions that we already have
+                callback.grant();
+            }
+
+            @Override
+            public GeckoResult<Integer> onContentPermissionRequest(GeckoSession s, PermissionDelegate.ContentPermission perm) {
+                if (perm.permission == PermissionDelegate.PERMISSION_GEOLOCATION) {
+                    final GeckoResult<Integer> result = new GeckoResult<>();
+                    new AlertDialog.Builder(MainActivity.this)
+                            .setTitle("Доступ к местоположению")
+                            .setMessage("Разрешить сайту доступ к вашему местоположению?")
+                            .setPositiveButton("Разрешить", (dialog, which) -> {
+                                result.complete(PermissionDelegate.ContentPermission.VALUE_ALLOW);
+                            })
+                            .setNegativeButton("Отклонить", (dialog, which) -> {
+                                result.complete(PermissionDelegate.ContentPermission.VALUE_DENY);
+                            })
+                            .setOnCancelListener(dialog -> {
+                                result.complete(PermissionDelegate.ContentPermission.VALUE_DENY);
+                            })
+                            .show();
+                    return result;
+                }
+                return GeckoResult.fromValue(PermissionDelegate.ContentPermission.VALUE_ALLOW);
+            }
         });
     }
 
     private void setupBottomBar() {
         btnBack.setOnClickListener(v -> {
-            if (webView.canGoBack()) {
-                webView.goBack();
+            if (canGoBack && currentSession != null) {
+                currentSession.goBack();
             }
         });
 
         btnForward.setOnClickListener(v -> {
-            if (webView.canGoForward()) {
-                webView.goForward();
+            if (canGoForward && currentSession != null) {
+                currentSession.goForward();
             }
         });
 
         btnHome.setOnClickListener(v -> showHomePage());
 
         btnRefresh.setOnClickListener(v -> {
-            if (webView.getUrl() != null) {
-                webView.reload();
+            if (!currentUrl.isEmpty() && currentSession != null) {
+                currentSession.reload();
             }
         });
 
@@ -725,7 +1012,7 @@ public class MainActivity extends Activity {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 String query = findInput.getText().toString();
                 if (!query.isEmpty()) {
-                    webView.findAllAsync(query);
+                    findInPage(query);
                 }
                 hideKeyboard();
                 return true;
@@ -733,12 +1020,13 @@ public class MainActivity extends Activity {
             return false;
         });
 
-        findViewById(R.id.find_prev).setOnClickListener(v -> webView.findNext(false));
-        findViewById(R.id.find_next).setOnClickListener(v -> webView.findNext(true));
+        findViewById(R.id.find_prev).setOnClickListener(v -> findPrev());
+        findViewById(R.id.find_next).setOnClickListener(v -> findNext());
         findViewById(R.id.find_close).setOnClickListener(v -> {
             findBar.setVisibility(View.GONE);
-            webView.clearMatches();
+            clearFindInPage();
             findInput.setText("");
+            currentFindQuery = "";
             hideKeyboard();
         });
     }
@@ -909,15 +1197,15 @@ public class MainActivity extends Activity {
         gestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onDoubleTap(MotionEvent e) {
-                if (webView.getVisibility() == View.VISIBLE) {
-                    webView.scrollTo(0, 0);
+                if (geckoView.getVisibility() == View.VISIBLE && currentSession != null) {
+                    currentSession.loadUri("javascript:window.scrollTo(0,0)");
                     return true;
                 }
                 return false;
             }
         });
 
-        webView.setOnTouchListener((v, event) -> {
+        geckoView.setOnTouchListener((v, event) -> {
             gestureDetector.onTouchEvent(event);
             return false;
         });
@@ -931,12 +1219,12 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (isVolumeScrollEnabled) {
+        if (isVolumeScrollEnabled && currentSession != null) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                webView.scrollBy(0, -200);
+                currentSession.loadUri("javascript:window.scrollBy(0,-200)");
                 return true;
             } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                webView.scrollBy(0, 200);
+                currentSession.loadUri("javascript:window.scrollBy(0,200)");
                 return true;
             }
         }
@@ -948,13 +1236,13 @@ public class MainActivity extends Activity {
     private void toggleNightMode() {
         isNightMode = !isNightMode;
         if (isNightMode) {
-            if (webView.getUrl() != null) {
-                webView.loadUrl(NIGHT_MODE_CSS);
+            if (!currentUrl.isEmpty() && currentSession != null) {
+                currentSession.loadUri(NIGHT_MODE_CSS);
             }
             Toast.makeText(this, "Ночной режим включён", Toast.LENGTH_SHORT).show();
         } else {
-            if (webView.getUrl() != null) {
-                webView.loadUrl(NIGHT_MODE_REMOVE_CSS);
+            if (!currentUrl.isEmpty() && currentSession != null) {
+                currentSession.loadUri(NIGHT_MODE_REMOVE_CSS);
             }
             Toast.makeText(this, "Ночной режим выключен", Toast.LENGTH_SHORT).show();
         }
@@ -964,13 +1252,16 @@ public class MainActivity extends Activity {
 
     private void toggleDataSaver() {
         isDataSaver = !isDataSaver;
-        webView.getSettings().setBlockNetworkImage(isDataSaver);
         if (isDataSaver) {
+            if (!currentUrl.isEmpty() && currentSession != null) {
+                currentSession.loadUri(DATA_SAVER_CSS);
+            }
             Toast.makeText(this, "Экономия данных: изображения заблокированы", Toast.LENGTH_SHORT).show();
-            if (webView.getUrl() != null) webView.reload();
         } else {
+            if (!currentUrl.isEmpty() && currentSession != null) {
+                currentSession.loadUri(DATA_SAVER_REMOVE_CSS);
+            }
             Toast.makeText(this, "Экономия данных выключена", Toast.LENGTH_SHORT).show();
-            if (webView.getUrl() != null) webView.reload();
         }
     }
 
@@ -978,10 +1269,25 @@ public class MainActivity extends Activity {
 
     private void takeScreenshot() {
         try {
-            Bitmap bitmap = Bitmap.createBitmap(webView.getWidth(), webView.getHeight(), Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(bitmap);
-            webView.draw(canvas);
+            if (currentSession == null) {
+                Toast.makeText(this, "Нет страницы для скриншота", Toast.LENGTH_SHORT).show();
+                return;
+            }
 
+            // GeckoView: take screenshot via view drawing
+            geckoView.setDrawingCacheEnabled(true);
+            Bitmap bitmap = Bitmap.createBitmap(geckoView.getWidth(), geckoView.getHeight(), Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            geckoView.draw(canvas);
+            geckoView.setDrawingCacheEnabled(false);
+            saveScreenshot(bitmap);
+        } catch (Exception e) {
+            Toast.makeText(this, "Не удалось сохранить скриншот", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void saveScreenshot(Bitmap bitmap) {
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.Images.Media.DISPLAY_NAME, "ZBrowser_" + System.currentTimeMillis() + ".png");
@@ -994,7 +1300,7 @@ public class MainActivity extends Activity {
                     if (out != null) {
                         bitmap.compress(Bitmap.CompressFormat.PNG, 90, out);
                         out.close();
-                        Toast.makeText(this, "Скриншот сохранён", Toast.LENGTH_SHORT).show();
+                        runOnUiThread(() -> Toast.makeText(this, "Скриншот сохранён", Toast.LENGTH_SHORT).show());
                     }
                 }
             } else {
@@ -1006,10 +1312,10 @@ public class MainActivity extends Activity {
                 out.close();
                 android.media.MediaScannerConnection.scanFile(this,
                         new String[]{file.getAbsolutePath()}, new String[]{"image/png"}, null);
-                Toast.makeText(this, "Скриншот сохранён", Toast.LENGTH_SHORT).show();
+                runOnUiThread(() -> Toast.makeText(this, "Скриншот сохранён", Toast.LENGTH_SHORT).show());
             }
         } catch (Exception e) {
-            Toast.makeText(this, "Не удалось сохранить скриншот", Toast.LENGTH_SHORT).show();
+            runOnUiThread(() -> Toast.makeText(this, "Не удалось сохранить скриншот", Toast.LENGTH_SHORT).show());
         }
     }
 
@@ -1035,9 +1341,11 @@ public class MainActivity extends Activity {
 
         currentUrl = url;
         homePage.setVisibility(View.GONE);
-        webView.setVisibility(View.VISIBLE);
+        geckoView.setVisibility(View.VISIBLE);
 
-        webView.loadUrl(url);
+        if (currentSession != null) {
+            currentSession.loadUri(url);
+        }
         urlBar.setText(url);
         hideKeyboard();
         hideSuggestions();
@@ -1055,7 +1363,7 @@ public class MainActivity extends Activity {
 
     private void showHomePage() {
         homePage.setVisibility(View.VISIBLE);
-        webView.setVisibility(View.GONE);
+        geckoView.setVisibility(View.GONE);
         urlBar.setText("");
         currentUrl = "";
         currentTitle = "";
@@ -1071,28 +1379,22 @@ public class MainActivity extends Activity {
     }
 
     private void toggleDesktopMode() {
-        WebSettings webSettings = webView.getSettings();
-        boolean isDesktop = webSettings.getUserAgentString().contains("Windows");
-
-        if (isDesktop) {
-            String ua = settings.getUserAgentString(this);
-            if (ua == null) {
-                webSettings.setUserAgentString("");
+        isDesktopMode = !isDesktopMode;
+        if (currentSession != null) {
+            GeckoSessionSettings sessionSettings = currentSession.getSettings();
+            if (isDesktopMode) {
+                sessionSettings.setUserAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP);
+                sessionSettings.setViewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP);
+                Toast.makeText(this, "Режим ПК", Toast.LENGTH_SHORT).show();
             } else {
-                webSettings.setUserAgentString(ua);
+                sessionSettings.setUserAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE);
+                sessionSettings.setViewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE);
+                Toast.makeText(this, "Мобильный режим", Toast.LENGTH_SHORT).show();
             }
-            webSettings.setUseWideViewPort(true);
-            webSettings.setLoadWithOverviewMode(true);
-            Toast.makeText(this, "Мобильный режим", Toast.LENGTH_SHORT).show();
-        } else {
-            webSettings.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            webSettings.setUseWideViewPort(true);
-            webSettings.setLoadWithOverviewMode(false);
-            Toast.makeText(this, "Режим ПК", Toast.LENGTH_SHORT).show();
-        }
 
-        if (webView.getUrl() != null) {
-            webView.reload();
+            if (!currentUrl.isEmpty()) {
+                currentSession.reload();
+            }
         }
     }
 
@@ -1165,6 +1467,18 @@ public class MainActivity extends Activity {
         tabs.add(tab);
         currentTabId = tabId;
         isIncognito = incognito;
+
+        // Create a new GeckoSession for this tab
+        GeckoSession newSession = createGeckoSession(incognito);
+        tabSessions.put(tabId, newSession);
+
+        // Switch to the new session
+        if (currentSession != null) {
+            geckoView.releaseSession();
+        }
+        currentSession = newSession;
+        geckoView.setSession(newSession);
+
         updateTabCount();
         showHomePage();
 
@@ -1173,16 +1487,6 @@ public class MainActivity extends Activity {
             toolbarContainer.setVisibility(View.VISIBLE);
             bottomBar.setVisibility(View.VISIBLE);
             fullscreenExitBar.setVisibility(View.GONE);
-        }
-
-        if (incognito) {
-            webView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
-            webView.getSettings().setSaveFormData(false);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
-        } else {
-            webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
-            webView.getSettings().setSaveFormData(true);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, settings.isCookiesEnabled());
         }
     }
 
@@ -1206,10 +1510,21 @@ public class MainActivity extends Activity {
         currentTabId = tabId;
         isIncognito = tab.isIncognito();
 
+        // Switch to the session for this tab
+        GeckoSession session = tabSessions.get(tabId);
+        if (session != null) {
+            if (currentSession != null) {
+                geckoView.releaseSession();
+            }
+            currentSession = session;
+            geckoView.setSession(session);
+        }
+
         if (tab.getUrl() != null && !tab.getUrl().isEmpty()) {
             homePage.setVisibility(View.GONE);
-            webView.setVisibility(View.VISIBLE);
-            webView.loadUrl(tab.getUrl());
+            geckoView.setVisibility(View.VISIBLE);
+            // Don't reload if the session already has the page loaded
+            // The session maintains its own state
         } else {
             showHomePage();
         }
@@ -1220,16 +1535,6 @@ public class MainActivity extends Activity {
             bottomBar.setVisibility(View.VISIBLE);
             fullscreenExitBar.setVisibility(View.GONE);
         }
-
-        if (isIncognito) {
-            webView.getSettings().setCacheMode(WebSettings.LOAD_NO_CACHE);
-            webView.getSettings().setSaveFormData(false);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
-        } else {
-            webView.getSettings().setCacheMode(WebSettings.LOAD_DEFAULT);
-            webView.getSettings().setSaveFormData(true);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, settings.isCookiesEnabled());
-        }
     }
 
     private void closeTab(int tabId) {
@@ -1237,6 +1542,13 @@ public class MainActivity extends Activity {
         if (idx < 0) return;
 
         boolean wasIncognito = tabs.get(idx).isIncognito();
+
+        // Close the GeckoSession for this tab
+        GeckoSession session = tabSessions.remove(tabId);
+        if (session != null && session.isOpen()) {
+            session.close();
+        }
+
         tabs.remove(idx);
 
         if (tabs.isEmpty()) {
@@ -1268,11 +1580,14 @@ public class MainActivity extends Activity {
 
     private void clearIncognitoData() {
         try {
-            CookieManager.getInstance().removeAllCookies(null);
-            webView.clearCache(true);
-            webView.clearFormData();
-            webView.clearHistory();
-            webView.clearSslPreferences();
+            // In GeckoView, private mode sessions do not persist data.
+            // Just clear any cached data via the runtime storage controller.
+            if (runtime != null) {
+                runtime.getStorageController().clearData(
+                        org.mozilla.geckoview.StorageController.ClearFlags.SITE_DATA |
+                        org.mozilla.geckoview.StorageController.ClearFlags.ALL
+                );
+            }
         } catch (Exception e) {
             // Non-critical
         }
@@ -1339,172 +1654,64 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    // ============ WebView Client ============
+    // ============ Find in Page (JavaScript injection) ============
 
-    private class ZBrowserWebViewClient extends WebViewClient {
-
-        @Override
-        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-            String url = request.getUrl().toString();
-
-            if (url.startsWith("tel:") || url.startsWith("mailto:") || url.startsWith("sms:")) {
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                    startActivity(intent);
-                } catch (Exception e) {
-                    Toast.makeText(MainActivity.this, "Не удалось открыть: " + url, Toast.LENGTH_SHORT).show();
-                }
-                return true;
-            }
-
-            if (url.startsWith("intent://")) {
-                try {
-                    Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
-                    if (intent != null) {
-                        startActivity(intent);
-                        return true;
-                    }
-                } catch (URISyntaxException e) {
-                    return true;
-                } catch (Exception e) {
-                    // App not installed, try fallback
-                    String fallback = request.getUrl().getQueryParameter("fallback");
-                    if (fallback != null && !fallback.isEmpty()) {
-                        view.loadUrl(fallback);
-                        return true;
-                    }
-                    Toast.makeText(MainActivity.this, "Приложение не найдено", Toast.LENGTH_SHORT).show();
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        @Override
-        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            String url = request.getUrl().toString();
-
-            if (shouldBlockAd(url)) {
-                return new WebResourceResponse("text/plain", "utf-8",
-                        new ByteArrayInputStream("".getBytes()));
-            }
-
-            return super.shouldInterceptRequest(view, request);
-        }
-
-        @Override
-        public void onPageStarted(WebView view, String url, Bitmap favicon) {
-            super.onPageStarted(view, url, favicon);
-            progressBar.setVisibility(View.VISIBLE);
-            progressBar.setProgress(0);
-            currentUrl = url;
-            urlBar.setText(url);
-        }
-
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            super.onPageFinished(view, url);
-            progressBar.setVisibility(View.GONE);
-            currentUrl = url;
-            urlBar.setText(url);
-            updateSslIcon(url.startsWith("https://"));
-            updateBookmarkIcon();
-
-            if (view.getTitle() != null && !view.getTitle().isEmpty()) {
-                currentTitle = view.getTitle();
-            } else {
-                currentTitle = url;
-            }
-            updateCurrentTab(url, currentTitle);
-
-            // Save to history (non-incognito only)
-            if (!isIncognito && url != null && !url.isEmpty()) {
-                database.addHistory(currentTitle != null ? currentTitle : url, url);
-            }
-
-            // Re-apply night mode if active
-            if (isNightMode) {
-                view.loadUrl(NIGHT_MODE_CSS);
-            }
-        }
-
-        @Override
-        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-            super.onReceivedError(view, request, error);
-            if (request.isForMainFrame()) {
-                progressBar.setVisibility(View.GONE);
-            }
-        }
-
-        @Override
-        public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-            new AlertDialog.Builder(MainActivity.this)
-                    .setTitle("Небезопасное соединение")
-                    .setMessage("Сертификат безопасности сайта недействителен. Продолжить?")
-                    .setPositiveButton("Продолжить", (dialog, which) -> handler.proceed())
-                    .setNegativeButton("Отмена", (dialog, which) -> handler.cancel())
-                    .show();
-        }
-
-        @Override
-        public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler, String host, String realm) {
-            View dialogView = getLayoutInflater().inflate(R.layout.dialog_http_auth, null);
-            new AlertDialog.Builder(MainActivity.this)
-                    .setTitle("Авторизация")
-                    .setView(dialogView)
-                    .setPositiveButton("Войти", (dialog, which) -> {
-                        String username = ((EditText) dialogView.findViewById(R.id.auth_username)).getText().toString();
-                        String password = ((EditText) dialogView.findViewById(R.id.auth_password)).getText().toString();
-                        handler.proceed(username, password);
-                    })
-                    .setNegativeButton("Отмена", (dialog, which) -> handler.cancel())
-                    .show();
+    private void findInPage(String query) {
+        currentFindQuery = query;
+        if (currentSession != null) {
+            String escaped = query.replace("\\", "\\\\").replace("'", "\\'");
+            currentSession.loadUri("javascript:window.find('" + escaped + "')");
         }
     }
 
-    // ============ Chrome Client ============
+    private void findNext() {
+        if (!currentFindQuery.isEmpty() && currentSession != null) {
+            String escaped = currentFindQuery.replace("\\", "\\\\").replace("'", "\\'");
+            currentSession.loadUri("javascript:window.find('" + escaped + "',false,false,true)");
+        }
+    }
 
-    private class ZBrowserWebChromeClient extends WebChromeClient {
+    private void findPrev() {
+        if (!currentFindQuery.isEmpty() && currentSession != null) {
+            String escaped = currentFindQuery.replace("\\", "\\\\").replace("'", "\\'");
+            currentSession.loadUri("javascript:window.find('" + escaped + "',false,true,true)");
+        }
+    }
 
-        @Override
-        public void onProgressChanged(WebView view, int newProgress) {
-            if (newProgress == 100) {
-                progressBar.setVisibility(View.GONE);
-            } else {
-                progressBar.setVisibility(View.VISIBLE);
-                progressBar.setProgress(newProgress);
+    private void clearFindInPage() {
+        if (currentSession != null) {
+            currentSession.loadUri("javascript:(function(){var sel=window.getSelection();if(sel)sel.removeAllRanges();})()");
+        }
+    }
+
+    // ============ File name guessing (replaces android.webkit.URLUtil) ============
+
+    private String guessFileName(String url, String contentDisposition, String mimeType) {
+        // Try filename from content disposition
+        if (contentDisposition != null) {
+            int idx = contentDisposition.indexOf("filename=");
+            if (idx >= 0) {
+                String name = contentDisposition.substring(idx + 9).replace("\"", "").trim();
+                if (!name.isEmpty()) return name;
             }
         }
-
-        @Override
-        public void onReceivedTitle(WebView view, String title) {
-            super.onReceivedTitle(view, title);
-            if (title != null && !title.isEmpty()) {
-                currentTitle = title;
-                updateCurrentTab(currentUrl, title);
+        // Try from URL
+        if (url != null) {
+            int queryIdx = url.indexOf('?');
+            String path = queryIdx >= 0 ? url.substring(0, queryIdx) : url;
+            int slashIdx = path.lastIndexOf('/');
+            if (slashIdx >= 0 && slashIdx < path.length() - 1) {
+                String name = path.substring(slashIdx + 1);
+                if (!name.isEmpty()) return name;
             }
         }
-
-        @Override
-        public void onShowCustomView(View view, CustomViewCallback callback) {
-            super.onShowCustomView(view, callback);
+        // Default with extension from mime type
+        if (mimeType != null) {
+            if (mimeType.contains("pdf")) return "download.pdf";
+            if (mimeType.contains("zip")) return "download.zip";
+            if (mimeType.contains("image")) return "download.jpg";
         }
-
-        @Override
-        public void onHideCustomView() {
-            super.onHideCustomView();
-        }
-
-        @Override
-        public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
-            new AlertDialog.Builder(MainActivity.this)
-                    .setTitle("Доступ к местоположению")
-                    .setMessage("Разрешить сайту доступ к вашему местоположению?")
-                    .setPositiveButton("Разрешить", (dialog, which) -> callback.invoke(origin, true, false))
-                    .setNegativeButton("Отклонить", (dialog, which) -> callback.invoke(origin, false, false))
-                    .show();
-        }
+        return "download";
     }
 
     // ============ Activity Results ============
@@ -1527,7 +1734,15 @@ public class MainActivity extends Activity {
                     createNewTab(data.getBooleanExtra("incognito", false));
                     break;
                 case 4: // Close all
+                    // Close all sessions
+                    for (GeckoSession session : tabSessions.values()) {
+                        if (session != null && session.isOpen()) {
+                            session.close();
+                        }
+                    }
+                    tabSessions.clear();
                     tabs.clear();
+                    currentSession = null;
                     createNewTab(false);
                     break;
             }
@@ -1565,6 +1780,13 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        // Close all sessions
+        for (GeckoSession session : tabSessions.values()) {
+            if (session != null && session.isOpen()) {
+                session.close();
+            }
+        }
+        tabSessions.clear();
         if (database != null) {
             database.close();
         }

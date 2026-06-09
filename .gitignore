@@ -1,0 +1,29 @@
+# Build output
+app/build/
+build/
+
+# Gradle cache
+.gradle/
+gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# Keystore (never commit signing keys)
+*.keystore
+*.jks
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compiled files
+*.class
+*.dex
+*.apk
+
+# GeckoView AAR (too large for git, download separately)
+geckoview/*.aar
+geckoview/extracted/
