@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SCANDINAVIAN ELITE Theme — clean, warm, minimal -->
+    <style name="Theme.ZBrowser" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">#2D5F6E</item>
+        <item name="android:colorPrimaryDark">#F5F3F0</item>
+        <item name="android:colorAccent">#2D5F6E</item>
+        <item name="android:statusBarColor">#F5F3F0</item>
+        <item name="android:navigationBarColor">#F5F3F0</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+    <!-- Tabs activity theme — matching Scandi design -->
+    <style name="Theme.ZBrowser.Tabs" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">#2D5F6E</item>
+        <item name="android:colorPrimaryDark">#F5F3F0</item>
+        <item name="android:colorAccent">#2D5F6E</item>
+        <item name="android:statusBarColor">#F5F3F0</item>
+        <item name="android:navigationBarColor">#F5F3F0</item>
+        <item name="android:windowBackground">#F5F3F0</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

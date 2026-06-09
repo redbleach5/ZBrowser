@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SCANDINAVIAN ELITE Color Palette -->
+    
+    <!-- Primary background: warm off-white like natural paper -->
+    <color name="background">#F5F3F0</color>
+    <!-- Surface/Cards: pure white, floating on warm bg -->
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_elevated">#FFFFFF</color>
+    
+    <!-- Primary text: near-black, NOT pure black -->
+    <color name="text_primary">#1A1A1A</color>
+    <!-- Secondary text: warm medium gray -->
+    <color name="text_secondary">#8A8A8A</color>
+    <!-- Tertiary/hint text: light gray -->
+    <color name="text_hint">#B8B8B8</color>
+    <!-- Text on dark backgrounds -->
+    <color name="text_on_dark">#FFFFFF</color>
+    <color name="text_on_dark_secondary">#B0B0B0</color>
+    
+    <!-- Accent: muted deep teal — sophisticated, NOT bright blue -->
+    <color name="accent">#2D5F6E</color>
+    <color name="primary">#2D5F6E</color>
+    <color name="primary_dark">#245050</color>
+    <!-- Accent light: very pale teal for highlights -->
+    <color name="accent_light">#E8F0F2</color>
+    
+    <!-- Divider: barely visible -->
+    <color name="divider">#EAEAEA</color>
+    
+    <!-- Toolbar bg: same as background — seamless -->
+    <color name="toolbar_bg">#F5F3F0</color>
+    <!-- Bottom bar bg: white, floating -->
+    <color name="bottom_bar_bg">#FFFFFF</color>
+    
+    <!-- Error: muted red -->
+    <color name="error">#C45B5B</color>
+    <!-- Success: muted sage green -->
+    <color name="success">#5B8C6E</color>
+    <!-- Warning -->
+    <color name="warning">#C4A35B</color>
+    
+    <!-- Incognito: charcoal, not pure black -->
+    <color name="incognito">#2A2A2A</color>
+    
+    <!-- Overlay: 40% alpha -->
+    <color name="overlay">#66000000</color>
+    
+    <!-- URL bar -->
+    <color name="url_bar_bg">#FFFFFF</color>
+    <color name="url_bar_bg_focused">#FFFFFF</color>
+    
+    <!-- Tab colors -->
+    <color name="tab_bg">#EAEAEA</color>
+    <color name="tab_active">#FFFFFF</color>
+    
+    <!-- Card -->
+    <color name="card_bg">#FFFFFF</color>
+    <color name="card_border">#EAEAEA</color>
+    
+    <!-- Snackbar -->
+    <color name="snackbar_bg">#2A2A2A</color>
+    
+    <!-- Quick link accent color (single Scandi accent) -->
+    <color name="ql_accent">#2D5F6E</color>
+</resources>
