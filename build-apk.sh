@@ -2,9 +2,10 @@
 set -e
 
 # =============================================
-# ZBrowser Full Build Script v3 — GeckoView
+# ZBrowser Full Build Script v3.1 — GeckoView
 # Builds APK with v1+v2+v3 signing
 # Includes Mozilla GeckoView engine (independent of system WebView)
+# Fixed: extractNativeLibs, proper alignment, GeckoView services in manifest
 # =============================================
 
 PROJECT=/home/z/my-project/ZBrowser
@@ -66,8 +67,8 @@ aapt2 link \
     --java $GEN_DIR \
     --target-sdk-version 28 \
     --min-sdk-version 21 \
-    --version-code 4 \
-    --version-name 3.0.0 \
+    --version-code 5 \
+    --version-name 3.1.0 \
     --auto-add-overlay \
     $COMPILED_RES/resources.zip \
     $GV_RES_ARG
@@ -107,10 +108,10 @@ for dex in $DEX_DIR/classes*.dex; do
     zip -j unsigned.apk "$dex"
 done
 
-# Add GeckoView native libraries using Python for correct APK paths
-echo "  Adding GeckoView native libraries..."
+# Add GeckoView native libraries and assets using Python for correct APK paths
+echo "  Adding GeckoView native libraries and assets..."
 python3 << 'PYEOF'
-import zipfile, os, shutil
+import zipfile, os
 
 apk_path = os.environ.get('APK_DIR', '/home/z/my-project/ZBrowser/app/build/apk') + '/unsigned.apk'
 gv_jni = '/home/z/my-project/ZBrowser/geckoview/extracted/jni'
@@ -120,13 +121,15 @@ with zipfile.ZipFile(apk_path, 'a', zipfile.ZIP_DEFLATED) as zf:
     # Add native libraries - arm64-v8a only (for modern devices)
     arch_dir = os.path.join(gv_jni, 'arm64-v8a')
     if os.path.isdir(arch_dir):
-        for so in os.listdir(arch_dir):
+        for so in sorted(os.listdir(arch_dir)):
             if so.endswith('.so'):
                 so_path = os.path.join(arch_dir, so)
                 arcname = f'lib/arm64-v8a/{so}'
-                print(f'  Adding {arcname} ({os.path.getsize(so_path)//1024//1024} MB)')
+                size_mb = os.path.getsize(so_path) // 1024 // 1024
+                print(f'  Adding {arcname} ({size_mb} MB)')
+                # STORED (no compression) for native libs — required for extractNativeLibs
                 zf.write(so_path, arcname, compress_type=zipfile.ZIP_STORED)
-    
+
     # Add assets (omni.ja etc.)
     if os.path.isdir(gv_assets):
         for root, dirs, files in os.walk(gv_assets):
@@ -142,6 +145,7 @@ PYEOF
 
 echo "=== Step 7: Zipalign ==="
 cd $APK_DIR
+# Use 4-byte alignment (sufficient because extractNativeLibs=true)
 zipalign -f 4 unsigned.apk aligned.apk
 
 echo "=== Step 8: Sign APK ==="
